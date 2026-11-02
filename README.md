@@ -209,11 +209,22 @@ Task Completion (Signals that the goal is achieved and stops the loop):
 
 ### 2. Strict Output Formatting Rules (CRITICAL)
 
-1. NEVER USE MARKDOWN CODE WINDOWS OR FENCES:
-   Do NOT wrap protocol commands or code blocks inside markdown fences (i.e., do NOT use ``` or ```python or backticks around protocol delimiters). Output all protocol delimiters and file contents as pure, raw plain text directly in the message body.
+1. CODE FENCING FOR FILE CONTENTS:
+   Always wrap the code content inside |WRITE| and |PATCH| in a standard code fence (```python ... ``` or ```text ... ```). This protects Python indentation, spaces, and special names (like __init__) from being mangled or stripped by the Markdown renderer.
+
+   Example:
+   |WRITE| D:\projects\app.py
+   ```python
+   import sys
+
+   class Calculator:
+       def __init__(self):
+           self.value = 0
+   ```
+   |WRITE|
 
 2. PRESERVE EXACT SYNTAX & INDENTATION:
-   Write code with exact spaces and indentation. Never allow markdown to strip or convert double underscores (e.g., `__init__`, `__name__` must remain intact with double underscores, never converted to bold or italics).
+   Write code with exact spaces and indentation.
 
 3. ONE COMMAND PER MESSAGE:
    Output strictly ONE protocol command per message and wait for the daemon feedback before proceeding to the next step.

@@ -4,7 +4,22 @@ let socket = null;
 let isConnected = false;
 let reconnectInterval = null;
 let heartbeatInterval = null;
-let boundTabId = null; // Locks execution strictly to one Gemini tab
+let lockedTabId = null; // Strictly locked to one Gemini tab
+
+async function verifyLockedTab() {
+  if (!lockedTabId) return null;
+  try {
+    const tab = await chrome.tabs.get(lockedTabId);
+    if (!tab) {
+      console.log(`[M.A.L.A Background] Tab ${lockedTabId} no longer exists. Resetting lock.`);
+      lockedTabId = null;
+    }
+  } catch (err) {
+    console.log(`[M.A.L.A Background] Tab ${lockedTabId} not found (${err.message}). Resetting lock.`);
+    lockedTabId = null;
+  }
+  return lockedTabId;
+}
 
 function connectDaemon() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
@@ -26,10 +41,10 @@ function connectDaemon() {
       }
 
       startHeartbeat();
-      notifyTabs({ type: "DAEMON_STATUS", connected: true, boundTabId: boundTabId });
+      notifyAll({ type: "DAEMON_STATUS", connected: true, lockedTabId: lockedTabId });
     };
 
-    socket.onmessage = (event) => {
+    socket.onmessage = async (event) => {
       try {
         const responseData = JSON.parse(event.data);
         
@@ -40,14 +55,15 @@ function connectDaemon() {
 
         console.log("[M.A.L.A Background] Received daemon payload:", responseData);
 
-        // Lock down feedback strictly to the single bound Gemini tab
-        if (boundTabId) {
-          chrome.tabs.sendMessage(boundTabId, { type: "DAEMON_RESPONSE", payload: responseData })
+        // Verify locked tab exists before dispatching
+        const activeLock = await verifyLockedTab();
+        if (activeLock) {
+          chrome.tabs.sendMessage(activeLock, { type: "DAEMON_RESPONSE", payload: responseData })
             .catch((err) => {
-              console.warn(`[M.A.L.A Background] Failed to send response to bound tab ${boundTabId}:`, err);
+              console.warn(`[M.A.L.A Background] Failed to send response to locked tab ${activeLock}:`, err);
             });
         } else {
-          console.warn("[M.A.L.A Background] Received daemon response but no Gemini tab is currently bound.");
+          console.warn("[M.A.L.A Background] Received daemon response but no Gemini tab is currently locked.");
         }
       } catch (err) {
         console.error("[M.A.L.A Background] Error parsing daemon message:", err);
@@ -58,13 +74,12 @@ function connectDaemon() {
       console.warn("[M.A.L.A Background] WebSocket disconnected. Retrying in 3s...");
       isConnected = false;
       stopHeartbeat();
-      notifyTabs({ type: "DAEMON_STATUS", connected: false });
+      notifyAll({ type: "DAEMON_STATUS", connected: false });
       scheduleReconnect();
     };
 
     socket.onerror = (err) => {
       console.warn("[M.A.L.A Background] WebSocket connection issue detected.");
-      socket.close();
     };
 
   } catch (err) {
@@ -79,7 +94,7 @@ function startHeartbeat() {
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ type: "PING" }));
     }
-  }, 15000); // 15 seconds keep-alive
+  }, 15000); // 15 seconds keepalive
 }
 
 function stopHeartbeat() {
@@ -98,7 +113,37 @@ function scheduleReconnect() {
   }
 }
 
-// Broadcast general status (connected/disconnected) to all Gemini tabs
+function forceReconnect() {
+  console.log("[M.A.L.A Background] Forcing reconnect to daemon...");
+  if (reconnectInterval) {
+    clearInterval(reconnectInterval);
+    reconnectInterval = null;
+  }
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = null;
+  }
+  if (socket) {
+    try {
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
+      socket.close();
+    } catch (e) {}
+    socket = null;
+  }
+  isConnected = false;
+  connectDaemon();
+}
+
+// Broadcast status to open popup views and Gemini tabs
+function notifyAll(message) {
+  chrome.runtime.sendMessage(message).catch(() => {});
+  notifyTabs(message);
+}
+
+// Broadcast general status to all Gemini tabs
 function notifyTabs(message) {
   chrome.tabs.query({ url: "https://gemini.google.com/*" }, (tabs) => {
     tabs.forEach((tab) => {
@@ -107,66 +152,149 @@ function notifyTabs(message) {
   });
 }
 
-// Clean up bound tab if the user closes it
+// If the locked tab is closed, automatically reset the lock until set manually
 chrome.tabs.onRemoved.addListener((tabId) => {
-  if (tabId === boundTabId) {
-    console.log(`[M.A.L.A Background] Bound Gemini tab (${tabId}) was closed. Releasing tab lock.`);
-    boundTabId = null;
+  if (tabId === lockedTabId) {
+    console.log(`[M.A.L.A Background] Locked tab (${tabId}) was closed. Resetting locked tab.`);
+    lockedTabId = null;
+    notifyAll({ type: "TAB_LOCK_STATE", isLocked: false, lockedTabId: null });
+  }
+});
+
+// If the locked tab navigates away from Gemini, reset lock
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (tabId === lockedTabId && changeInfo.url) {
+    if (!changeInfo.url.includes("gemini.google.com")) {
+      console.log(`[M.A.L.A Background] Locked tab (${tabId}) navigated away from Gemini. Resetting lock.`);
+      lockedTabId = null;
+      notifyAll({ type: "TAB_LOCK_STATE", isLocked: false, lockedTabId: null });
+    }
   }
 });
 
 // Extension message router
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.type === "KEEPALIVE") {
-    // Keepalive ping from content script keeps service worker awake and ensures socket is connected
-    if (!isConnected || !socket || socket.readyState !== WebSocket.OPEN) {
-      connectDaemon();
-    }
-    sendResponse({ status: "ALIVE", connected: isConnected, boundTabId: boundTabId });
-    return true;
-  }
-
-  if (request.type === "SEND_TO_DAEMON") {
-    // Lock execution strictly to the tab initiating the command
-    if (sender && sender.tab) {
-      if (boundTabId && boundTabId !== sender.tab.id) {
-        console.log(`[M.A.L.A Background] Tab ${sender.tab.id} attempted command while tab ${boundTabId} is bound. Updating bound tab.`);
+  (async () => {
+    if (request.type === "KEEPALIVE") {
+      if (!isConnected || !socket || socket.readyState !== WebSocket.OPEN) {
+        connectDaemon();
       }
-      boundTabId = sender.tab.id;
+      const activeLock = await verifyLockedTab();
+      sendResponse({ status: "ALIVE", connected: isConnected, lockedTabId: activeLock });
+      return;
     }
 
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(request.payload));
-      sendResponse({ status: "SENT", boundTabId: boundTabId });
-    } else {
-      console.error("[M.A.L.A Background] Cannot send packet: WebSocket is disconnected. Attempting reconnect...");
-      connectDaemon();
-      sendResponse({ status: "ERROR", message: "Daemon WebSocket offline. Reconnecting..." });
+    if (request.type === "CHECK_TAB_LOCK") {
+      const activeLock = await verifyLockedTab();
+      const isSenderLocked = (sender.tab && sender.tab.id === activeLock);
+      sendResponse({ isLocked: !!isSenderLocked, lockedTabId: activeLock });
+      return;
     }
-    return true;
-  }
 
-  if (request.type === "TASK_COMPLETED") {
-    console.log("[M.A.L.A Background] Task completed signal received from tab:", sender?.tab?.id);
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(request.payload));
+    if (request.type === "REQUEST_TAB_LOCK_OR_STATUS") {
+      const activeLock = await verifyLockedTab();
+      const senderTabId = sender?.tab?.id;
+      if (!activeLock) {
+        // No tab currently locked: auto-lock to sender
+        lockedTabId = senderTabId || null;
+        console.log(`[M.A.L.A Background] Auto-locked to tab ${lockedTabId}`);
+        notifyAll({ type: "TAB_LOCK_STATE", isLocked: true, lockedTabId: lockedTabId });
+        sendResponse({ canAutoLock: true, lockedTabId: lockedTabId });
+      } else if (activeLock === senderTabId) {
+        sendResponse({ canAutoLock: true, lockedTabId: lockedTabId });
+      } else {
+        sendResponse({ canAutoLock: false, lockedTabId: activeLock });
+      }
+      return;
     }
-    sendResponse({ status: "ACK" });
-    return true;
-  }
 
-  if (request.type === "GET_DAEMON_STATUS") {
-    sendResponse({ connected: isConnected, boundTabId: boundTabId });
-    return true;
-  }
+    if (request.type === "SET_LOCKED_TAB") {
+      const previousLockedTab = lockedTabId;
+      const newLockedTab = request.tabId;
 
-  if (request.type === "RECONNECT_DAEMON") {
-    connectDaemon();
-    sendResponse({ status: "RECONNECTING" });
-    return true;
-  }
+      if (previousLockedTab && previousLockedTab !== newLockedTab) {
+        chrome.tabs.sendMessage(previousLockedTab, { type: "TAB_LOCK_STATE", isLocked: false }).catch(() => {});
+      }
 
-  return true;
+      lockedTabId = newLockedTab;
+      console.log(`[M.A.L.A Background] Tab lock manually set to: ${lockedTabId}`);
+
+      if (lockedTabId) {
+        chrome.tabs.sendMessage(lockedTabId, { type: "TAB_LOCK_STATE", isLocked: true }).catch(() => {});
+      }
+
+      notifyAll({ type: "TAB_LOCK_STATE", isLocked: true, lockedTabId: lockedTabId });
+      sendResponse({ status: "UPDATED", lockedTabId: lockedTabId });
+      return;
+    }
+
+    if (request.type === "SET_LOCKED_TAB_FOR_SENDER") {
+      const senderTabId = sender?.tab?.id;
+      if (senderTabId) {
+        const previousLockedTab = lockedTabId;
+        if (previousLockedTab && previousLockedTab !== senderTabId) {
+          chrome.tabs.sendMessage(previousLockedTab, { type: "TAB_LOCK_STATE", isLocked: false }).catch(() => {});
+        }
+        lockedTabId = senderTabId;
+        console.log(`[M.A.L.A Background] Tab lock claimed by sender tab: ${lockedTabId}`);
+        chrome.tabs.sendMessage(lockedTabId, { type: "TAB_LOCK_STATE", isLocked: true }).catch(() => {});
+        notifyAll({ type: "TAB_LOCK_STATE", isLocked: true, lockedTabId: lockedTabId });
+        sendResponse({ status: "UPDATED", lockedTabId: lockedTabId });
+      } else {
+        sendResponse({ status: "ERROR" });
+      }
+      return;
+    }
+
+    if (request.type === "SEND_TO_DAEMON") {
+      const activeLock = await verifyLockedTab();
+      const senderTabId = sender?.tab?.id;
+
+      // Auto-lock if none locked
+      if (!activeLock && senderTabId) {
+        lockedTabId = senderTabId;
+        console.log(`[M.A.L.A Background] Auto-locking to tab ${lockedTabId} on first command.`);
+        notifyAll({ type: "TAB_LOCK_STATE", isLocked: true, lockedTabId: lockedTabId });
+      } else if (activeLock && senderTabId !== activeLock) {
+        console.warn(`[M.A.L.A Background] Rejected command from tab ${senderTabId}. Active locked tab is ${activeLock}.`);
+        sendResponse({ status: "REJECTED", message: `Tab is not the locked M.A.L.A tab (${activeLock}).` });
+        return;
+      }
+
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify(request.payload));
+        sendResponse({ status: "SENT", lockedTabId: lockedTabId });
+      } else {
+        console.error("[M.A.L.A Background] Cannot send packet: WebSocket is disconnected. Reconnecting...");
+        connectDaemon();
+        sendResponse({ status: "ERROR", message: "Daemon WebSocket offline. Reconnecting..." });
+      }
+      return;
+    }
+
+    if (request.type === "TASK_COMPLETED") {
+      console.log("[M.A.L.A Background] Task completed signal received from tab:", sender?.tab?.id);
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify(request.payload));
+      }
+      sendResponse({ status: "ACK" });
+      return;
+    }
+
+    if (request.type === "GET_DAEMON_STATUS") {
+      const activeLock = await verifyLockedTab();
+      sendResponse({ connected: isConnected, lockedTabId: activeLock });
+      return;
+    }
+
+    if (request.type === "RECONNECT_DAEMON") {
+      forceReconnect();
+      sendResponse({ status: "RECONNECTING" });
+      return;
+    }
+  })();
+
+  return true; // Asynchronous sendResponse
 });
 
 connectDaemon();

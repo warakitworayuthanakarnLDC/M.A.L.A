@@ -5,6 +5,7 @@
   "description": "Local agent bridge connecting Google Gemini to the M.A.L.A Python daemon.",
   "permissions": [
     "activeTab",
+    "tabs",
     "storage"
   ],
   "host_permissions": [
@@ -22,6 +23,16 @@
         "content.js"
       ],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "systemprompt.txt"
+      ],
+      "matches": [
+        "https://gemini.google.com/*"
+      ]
     }
   ],
   "action": {

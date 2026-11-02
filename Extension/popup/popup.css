@@ -11,7 +11,7 @@
 }
 
 body {
-  width: 260px;
+  width: 270px;
   margin: 0;
   padding: 12px;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -55,7 +55,7 @@ body {
   align-items: center;
   gap: 8px;
   font-size: 0.85rem;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
   padding: 8px;
   background: #181825;
   border-radius: 6px;
@@ -68,6 +68,7 @@ body {
   background-color: var(--red);
   display: inline-block;
   transition: background-color 0.3s ease;
+  flex-shrink: 0;
 }
 
 .status-dot.online {
@@ -75,10 +76,26 @@ body {
   box-shadow: 0 0 8px var(--green);
 }
 
+.tab-lock-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  padding: 6px 8px;
+  background: #181825;
+  border-radius: 6px;
+  color: var(--text-dim);
+}
+
+.tab-lock-box.active {
+  color: var(--green);
+  border: 1px solid rgba(166, 227, 161, 0.3);
+}
+
 .controls {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .control-row {
@@ -137,7 +154,8 @@ input:checked + .slider:before {
   border: none;
   background-color: var(--btn-bg);
   color: #ffffff;
-  font-size: 0.85rem;
+  font-size: 0.82rem;
+  font-weight: 500;
   border-radius: 6px;
   cursor: pointer;
   transition: background-color 0.2s ease, transform 0.1s ease;
@@ -149,4 +167,32 @@ input:checked + .slider:before {
 
 .btn:active {
   transform: scale(0.98);
+}
+
+.btn-accent {
+  background-color: var(--accent);
+  color: #11111b;
+  font-weight: 600;
+}
+
+.btn-accent:hover {
+  background-color: #b4befe;
+}
+
+.btn-accent.is-locked {
+  background-color: var(--green);
+  color: #11111b;
+}
+
+.btn-accent.is-locked:hover {
+  background-color: #94e2d5;
+}
+
+.btn-secondary {
+  background-color: #313244;
+  color: var(--text-color);
+}
+
+.btn-secondary:hover {
+  background-color: #45475a;
 }
