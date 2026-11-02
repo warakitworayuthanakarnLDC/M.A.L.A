@@ -44,7 +44,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (response.connected) {
         statusDot.classList.add('online');
-        statusText.textContent = "Daemon Connected";
+        statusText.textContent = response.boundTabId ? `Connected (Tab #${response.boundTabId})` : "Daemon Connected";
       } else {
         setOffline();
       }

@@ -6,12 +6,19 @@
 
   let isEnabled = true;
 
+  // Keep background service worker alive and ensure WebSocket remains connected
+  setInterval(() => {
+    chrome.runtime.sendMessage({ type: "KEEPALIVE" }).catch(() => {});
+  }, 15000);
+
   // Regex patterns for protocol parsing
   const PATTERNS = {
     PS: /\|PS\|\s*([\s\S]*?)\s*\|PS\|/,
-    READ: /\|READ\|\s*([^\r\n:]+):(\d+)-(\d+)\s*\|READ\|/,
+    // Supports Windows drive letters and optional :start-end line ranges
+    READ: /\|READ\|\s*(.+?)(?::\s*(\d+)\s*-\s*(\d+))?\s*\|READ\|/,
     WRITE: /\|WRITE\|\s*([^\r\n]+)\r?\n([\s\S]*?)\|WRITE\|/,
-    PATCH: /\|PATCH\|\s*([^\r\n]+)\r?\n[\s\S]*?<<<<<<< SEARCH\r?\n([\s\S]*?)\r?\n=======\r?\n([\s\S]*?)\r?\n>>>>>>> REPLACE\s*\|PATCH\|/
+    PATCH: /\|PATCH\|\s*([^\r\n]+)\r?\n[\s\S]*?<<<<<<< SEARCH\r?\n([\s\S]*?)\r?\n=======\r?\n([\s\S]*?)\r?\n>>>>>>> REPLACE\s*\|PATCH\|/,
+    ENDTASK: /\|ENDTASK\|\s*([\s\S]*?)\s*\|ENDTASK\|/
   };
 
   // 1. Observe DOM mutations for assistant responses
@@ -44,8 +51,20 @@
 
     if (commandPayload) {
       latestNode.dataset.malaProcessed = "true";
+
+      // Handle Task Completion: Stop loop, do not inject feedback or click Send
+      if (commandPayload.type === "END_TASK") {
+        console.log("[M.A.L.A Content Script] Task completed by agent:", commandPayload.summary);
+        showToast(`[M.A.L.A] Task Completed: ${commandPayload.summary}`);
+        chrome.runtime.sendMessage({
+          type: "TASK_COMPLETED",
+          payload: commandPayload
+        });
+        return;
+      }
+
       console.log("[M.A.L.A Content Script] Protocol block detected & dispatched:", commandPayload);
-      
+
       chrome.runtime.sendMessage({
         type: "SEND_TO_DAEMON",
         payload: commandPayload
@@ -58,24 +77,39 @@
   }
 
   function parseProtocolText(text) {
-    // 1. Shell Command Execution (|PS|)
-    const psMatch = text.match(PATTERNS.PS);
-    if (psMatch) {
-      return { type: "EXEC_SHELL", command: psMatch[1].trim() };
-    }
-
-    // 2. Read File Range (|READ|)
-    const readMatch = text.match(PATTERNS.READ);
-    if (readMatch) {
+    // 1. Task Completion (|ENDTASK|)
+    const endMatch = text.match(PATTERNS.ENDTASK);
+    if (endMatch) {
       return {
-        type: "READ_FILE",
-        path: readMatch[1].trim(),
-        start_line: parseInt(readMatch[2], 10),
-        end_line: parseInt(readMatch[3], 10)
+        type: "END_TASK",
+        summary: endMatch[1].trim() || "Task completed successfully."
       };
     }
 
-    // 3. Patch File Block (|PATCH|)
+    // 2. Shell Command Execution (|PS|)
+    const psMatch = text.match(PATTERNS.PS);
+    if (psMatch) {
+      let command = psMatch[1].trim();
+      // Defensively strip accidental markdown code block fences
+      command = command.replace(/^```[a-zA-Z0-9_-]*\r?\n?/, '').replace(/\r?\n?```\s*$/, '').trim();
+      return { type: "EXEC_SHELL", command: command };
+    }
+
+    // 3. Read File Range (|READ|)
+    const readMatch = text.match(PATTERNS.READ);
+    if (readMatch) {
+      const filePath = readMatch[1].trim();
+      const startLine = readMatch[2] ? parseInt(readMatch[2], 10) : 1;
+      const endLine = readMatch[3] ? parseInt(readMatch[3], 10) : 200;
+      return {
+        type: "READ_FILE",
+        path: filePath,
+        start_line: startLine,
+        end_line: endLine
+      };
+    }
+
+    // 4. Patch File Block (|PATCH|)
     const patchMatch = text.match(PATTERNS.PATCH);
     if (patchMatch) {
       return {
@@ -86,13 +120,16 @@
       };
     }
 
-    // 4. Overwrite/Write File (|WRITE|)
+    // 5. Overwrite/Write File (|WRITE|)
     const writeMatch = text.match(PATTERNS.WRITE);
     if (writeMatch) {
+      let content = writeMatch[2];
+      // Defensively strip accidental markdown code block fences wrapping the content
+      content = content.replace(/^```[a-zA-Z0-9_-]*\r?\n/, '').replace(/\r?\n```\s*$/, '');
       return {
         type: "WRITE_FILE",
         path: writeMatch[1].trim(),
-        content: writeMatch[2]
+        content: content
       };
     }
 
@@ -163,6 +200,17 @@
         console.error("[M.A.L.A Content Script] Active send button unavailable for submit.");
       }
     }, 250);
+  }
+
+  function showToast(message) {
+    const existing = document.getElementById('mala-toast');
+    if (existing) existing.remove();
+    const toast = document.createElement('div');
+    toast.id = 'mala-toast';
+    toast.textContent = message;
+    toast.style.cssText = "position: fixed; bottom: 80px; right: 24px; background: #1e1e2e; color: #a6e3a1; border: 1px solid #a6e3a1; padding: 12px 20px; border-radius: 8px; z-index: 999999; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px; font-weight: 500; box-shadow: 0 4px 16px rgba(0,0,0,0.4); pointer-events: none;";
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 7000);
   }
 
   initObserver();

@@ -19,6 +19,7 @@ class MALAServer:
 
     async def handler(self, websocket):
         client_address = websocket.remote_address
+        print(f"\n[INFO] Extension client connected from {client_address}")
         logging.info(f"Extension connected from {client_address}")
 
         try:
@@ -41,24 +42,33 @@ class MALAServer:
                     continue
 
                 # 2. Command Dispatch: Pass payload through registered handler
-                logging.info(f"Processing command type: {payload.get('type')}")
+                cmd_type = payload.get("type")
+                logging.info(f"Processing command type: {cmd_type}")
                 if self.handler_func:
                     response = await self.handler_func(payload)
                 else:
                     response = await handle_protocol_message(payload)
-                
-                await websocket.send(json.dumps(response))
+
+                if response is not None:
+                    await websocket.send(json.dumps(response))
 
         except websockets.exceptions.ConnectionClosedOK:
+            print(f"\n[INFO] Extension client disconnected cleanly: {client_address}")
             logging.info(f"Extension disconnected cleanly: {client_address}")
         except websockets.exceptions.ConnectionClosedError as e:
+            print(f"\n[WARN] Extension connection dropped unexpectedly ({e.code}): {client_address}")
             logging.warning(f"Extension connection closed unexpectedly ({e.code}): {client_address}")
+        except websockets.exceptions.ConnectionClosed as e:
+            print(f"\n[WARN] Extension connection closed: {client_address}")
+            logging.warning(f"Extension connection closed: {client_address}")
         except Exception as e:
             logging.error(f"Unexpected server error during handling: {e}")
+        finally:
+            logging.info(f"Connection handler ended for {client_address}")
 
     async def start(self):
         logging.info(f"M.A.L.A Daemon listening on ws://{self.host}:{self.port}")
-        async with websockets.serve(self.handler, self.host, self.port):
+        async with websockets.serve(self.handler, self.host, self.port, ping_interval=10, ping_timeout=10):
             await asyncio.Future()
 
 
