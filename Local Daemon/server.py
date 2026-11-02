@@ -1,62 +1,68 @@
 import asyncio
 import json
 import logging
-from typing import Callable, Optional, Awaitable
 import websockets
-from websockets.server import WebSocketServerProtocol
+from protocol import handle_protocol_message
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s - %(message)s")
 
 
-class MalaWebSocketServer:
+class MALAServer:
     def __init__(self, host: str = "127.0.0.1", port: int = 8765):
         self.host = host
         self.port = port
-        self.active_connection: Optional[WebSocketServerProtocol] = None
-        self.message_handler: Optional[Callable[[dict], Awaitable[dict]]] = None
 
-    def set_handler(self, handler: Callable[[dict], Awaitable[dict]]) -> None:
-        """Registers the main request router (from protocol.py)."""
-        self.message_handler = handler
-
-    async def _connection_handler(self, websocket: WebSocketServerProtocol) -> None:
-        """Handles incoming browser extension WebSocket connections."""
-        self.active_connection = websocket
-        logging.info(f"Extension connected from {websocket.remote_address}")
+    async def handler(self, websocket):
+        client_address = websocket.remote_address
+        logging.info(f"Extension connected from {client_address}")
 
         try:
-            async for raw_message in websocket:
+            async for message in websocket:
                 try:
-                    data = json.loads(raw_message)
-                    logging.info(f"Received action request: {data.get('type')}")
-
-                    if self.message_handler:
-                        response = await self.message_handler(data)
-                        if response:
-                            await websocket.send(json.dumps(response))
-                    else:
-                        await websocket.send(json.dumps({
-                            "status": "ERROR",
-                            "error": "No execution handler attached to server."
-                        }))
-
+                    payload = json.loads(message)
                 except json.JSONDecodeError:
-                    logging.error("Received malformed JSON message from extension.")
-                    await websocket.send(json.dumps({
-                        "status": "ERROR",
-                        "error": "Payload is not valid JSON."
-                    }))
+                    logging.error("Received malformed JSON packet from extension.")
+                    await websocket.send(
+                        json.dumps({
+                            "status": "ERROR",
+                            "output": "Invalid JSON format received by daemon."
+                        })
+                    )
+                    continue
 
-        except websockets.exceptions.ConnectionClosedError:
-            logging.warning("Extension connection closed abruptly.")
-        finally:
-            self.active_connection = None
-            logging.info("Extension disconnected.")
+                # 1. Heartbeat Handler: Reply to PING frames with PONG
+                if payload.get("type") == "PING":
+                    await websocket.send(json.dumps({"type": "PONG"}))
+                    continue
 
-    async def start(self) -> None:
-        """Starts the asynchronous WebSocket server listener loop."""
-        async with websockets.serve(self._connection_handler, self.host, self.port):
-            logging.info(f"M.A.L.A Daemon listening on ws://{self.host}:{self.port}")
-            await asyncio.get_running_loop().create_future()
+                # 2. Command Dispatch: Process standard agent protocol actions
+                logging.info(f"Processing command type: {payload.get('type')}")
+                response = await handle_protocol_message(payload)
+                
+                # Send execution result back to Chrome Extension
+                await websocket.send(json.dumps(response))
 
-    
+        except websockets.exceptions.ConnectionClosedOK:
+            logging.info(f"Extension disconnected cleanly: {client_address}")
+        except websockets.exceptions.ConnectionClosedError as e:
+            logging.warning(f"Extension connection closed unexpectedly ({e.code}): {client_address}")
+        except Exception as e:
+            logging.error(f"Unexpected server error during handling: {e}")
+
+    async def start(self):
+        logging.info(f"M.A.L.A Daemon listening on ws://{self.host}:{self.port}")
+        async with websockets.serve(self.handler, self.host, self.port):
+            await asyncio.Future()  # Run server indefinitely
+
+
+# Class alias to satisfy main.py import expectation
+MalaWebSocketServer = MALAServer
+
+
+def run_server():
+    server = MALAServer()
+    asyncio.run(server.start())
+
+
+if __name__ == "__main__":
+    run_server()

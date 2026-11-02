@@ -1,58 +1,43 @@
 import logging
+from approval import request_approval
 from shell_executor import execute_shell_command
-from file_manager import read_file_range, write_file, apply_patch
+from file_manager import read_file_range, write_file, patch_file
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s - %(message)s")
 
 
-async def process_message(data: dict) -> dict:
-    """Parses incoming WebSocket JSON payloads from the Chrome extension and routes to appropriate handlers[cite: 1]."""
-    action_type = data.get("type", "").upper()
-    logging.info(f"Processing action type: {action_type}")
+async def handle_protocol_message(payload: dict) -> dict:
+    """Dispatches incoming JSON protocol action payloads to corresponding handlers."""
+    msg_type = payload.get("type")
 
-    try:
-        if action_type == "EXEC_SHELL":
-            command = data.get("command", "")
-            if not command:
-                return {"status": "ERROR", "output": "Missing 'command' parameter."}
-            timeout = data.get("timeout", 30)
-            return await execute_shell_command(command, timeout=timeout)
+    if msg_type == "EXEC_SHELL":
+        command = payload.get("command", "")
+        if not request_approval("EXEC_SHELL", command):
+            return {"status": "DENIED", "output": "Shell execution denied by user."}
+        return await execute_shell_command(command)
 
-        elif action_type == "READ_FILE":
-            file_path = data.get("path", "")
-            if not file_path:
-                return {"status": "ERROR", "output": "Missing 'path' parameter."}
-            start_line = int(data.get("start_line", 1))
-            end_line = int(data.get("end_line", 200))
-            return await read_file_range(file_path, start_line, end_line)
+    elif msg_type == "READ_FILE":
+        path = payload.get("path", "")
+        start = payload.get("start_line", 1)
+        end = payload.get("end_line", 100)
+        if not request_approval("READ_FILE", f"{path} (lines {start}-{end})"):
+            return {"status": "DENIED", "output": "File read denied by user."}
+        return read_file_range(path, start, end)
 
-        elif action_type == "WRITE_FILE":
-            file_path = data.get("path", "")
-            content = data.get("content", "")
-            if not file_path:
-                return {"status": "ERROR", "output": "Missing 'path' parameter."}
-            return await write_file(file_path, content)
+    elif msg_type == "WRITE_FILE":
+        path = payload.get("path", "")
+        content = payload.get("content", "")
+        if not request_approval("WRITE_FILE", path):
+            return {"status": "DENIED", "output": "File write denied by user."}
+        return write_file(path, content)
 
-        elif action_type == "PATCH_FILE":
-            file_path = data.get("path", "")
-            search_block = data.get("search", "")
-            replace_block = data.get("replace", "")
-            if not file_path or not search_block:
-                return {"status": "ERROR", "output": "Missing required patch parameters ('path', 'search')."}
-            return await apply_patch(file_path, search_block, replace_block)
+    elif msg_type == "PATCH_FILE":
+        path = payload.get("path", "")
+        search = payload.get("search", "")
+        replace = payload.get("replace", "")
+        if not request_approval("PATCH_FILE", path):
+            return {"status": "DENIED", "output": "File patch denied by user."}
+        return patch_file(path, search, replace)
 
-        else:
-            logging.warning(f"Received unknown action type: {action_type}")
-            return {
-                "status": "ERROR",
-                "output": f"Unknown action type: '{action_type}'"
-            }
-
-    except Exception as e:
-        logging.error(f"Error handling protocol message: {e}")
-        return {
-            "status": "ERROR",
-            "output": f"Internal daemon error: {str(e)}"
-        }
-
-
+    else:
+        return {"status": "ERROR", "output": f"Unknown protocol action type: {msg_type}"}
