@@ -58,3 +58,5 @@ class MalaWebSocketServer:
         async with websockets.serve(self._connection_handler, self.host, self.port):
             logging.info(f"M.A.L.A Daemon listening on ws://{self.host}:{self.port}")
             await asyncio.get_running_loop().create_future()
+
+    
