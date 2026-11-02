@@ -11,6 +11,11 @@ class MALAServer:
     def __init__(self, host: str = "127.0.0.1", port: int = 8765):
         self.host = host
         self.port = port
+        self.handler_func = None
+
+    def set_handler(self, handler_func):
+        """Registers the protocol dispatch function from main.py."""
+        self.handler_func = handler_func
 
     async def handler(self, websocket):
         client_address = websocket.remote_address
@@ -30,16 +35,18 @@ class MALAServer:
                     )
                     continue
 
-                # 1. Heartbeat Handler: Reply to PING frames with PONG
+                # 1. Heartbeat Handler: Intercept PING packets and reply with PONG
                 if payload.get("type") == "PING":
                     await websocket.send(json.dumps({"type": "PONG"}))
                     continue
 
-                # 2. Command Dispatch: Process standard agent protocol actions
+                # 2. Command Dispatch: Pass payload through registered handler
                 logging.info(f"Processing command type: {payload.get('type')}")
-                response = await handle_protocol_message(payload)
+                if self.handler_func:
+                    response = await self.handler_func(payload)
+                else:
+                    response = await handle_protocol_message(payload)
                 
-                # Send execution result back to Chrome Extension
                 await websocket.send(json.dumps(response))
 
         except websockets.exceptions.ConnectionClosedOK:
@@ -52,10 +59,10 @@ class MALAServer:
     async def start(self):
         logging.info(f"M.A.L.A Daemon listening on ws://{self.host}:{self.port}")
         async with websockets.serve(self.handler, self.host, self.port):
-            await asyncio.Future()  # Run server indefinitely
+            await asyncio.Future()
 
 
-# Class alias to satisfy main.py import expectation
+# Class alias to satisfy main.py imports
 MalaWebSocketServer = MALAServer
 
 
