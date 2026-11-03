@@ -1,4 +1,4 @@
-# M.A.L.A — Make Any LLM Agentic
+# M.A.L.A  Make Any LLM Agentic
 
 ![License](https://img.shields.io/badge/License-Proprietary%20(View%20%26%20Run%20Only)-red.svg)
 ![Python](https://img.shields.io/badge/Python-3.10%2B%20%7C%203.12-blue.svg?logo=python&logoColor=white)
@@ -9,7 +9,7 @@
 
 **M.A.L.A (Make Any LLM Agentic)** is a local agent bridge that turns web-based LLMs into autonomous code-executing, self-healing local agents.
 
-By pairing a Manifest V3 Chrome Extension with a lightweight Python Daemon over WebSockets, M.A.L.A allows web models to execute PowerShell commands, read file slices, overwrite files, apply surgical search-and-replace patches, and automatically heal from execution errors — all without leaving the native browser interface.
+By pairing a Manifest V3 Chrome Extension with a lightweight Python Daemon over WebSockets, M.A.L.A allows web models to execute PowerShell commands, read file slices, overwrite files, apply surgical search-and-replace patches, and automatically heal from execution errors all without leaving the native browser interface.
 
 ---
 
