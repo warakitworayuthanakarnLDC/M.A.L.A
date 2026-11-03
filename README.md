@@ -173,6 +173,7 @@ Confirm that the server starts successfully:
 ## System Initialization Prompt
 
 Paste the following into a fresh chat with Gemini to configure the model for M.A.L.A execution.
+(The Complete prompt is also given in the repository as systemprompt.txt)
 
 ```text
 [SYSTEM INSTRUCTION: M.A.L.A (Make Any LLM Agentic) INITIALIZATION]
